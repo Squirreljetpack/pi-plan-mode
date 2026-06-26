@@ -1,0 +1,20 @@
+{
+  "name": "pi-plan-mode",
+  "version": "1.0.0",
+  "description": "Plan mode extension for pi — switch to a thinking model, produce implementation plans, then resume coding",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "plan",
+    "planning",
+    "mode"
+  ],
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./extensions"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*"
+  }
+}
