@@ -1,163 +1,297 @@
 /**
  * Plan Mode Extension
  *
- * Adds /plan and /endplan commands.
+ * Adds /plan, /endplan, and /writeplan commands.
  *
- * - /plan   switches to a configurable "plan model", disables all tools (the
- *           plan model is read-only and produces its output as text), and
- *           appends a short system-prompt instruction telling the model to
- *           produce a numbered implementation plan from the context it is
- *           given.
- * - /endplan restores the previous model, thinking level, and tool set.
- *
- * While plan mode is active, the extension blocks write, edit, and bash tool
- * calls outright as a defensive guard.
- *
- * Configuration (~/.pi/agent/plan-mode.json or .pi/plan-mode.json):
- *   {
- *     "provider": "opencode-go",          // provider id from the model registry
- *     "model": "qwen3.7-plus",            // model id within that provider
- *     "thinkingLevel": "high",            // optional: off|minimal|low|medium|high|xhigh
- *     "planFile": "PLAN.md",              // optional, default "PLAN.md" (informational)
- *     "instructions": "..."               // optional, replaces the default instructions
- *   }
- *
- * Project-local config takes precedence over the global one.
+ * - /plan              switches to the configured plan model, disables blocked
+ * tools, and appends planning instructions to the system prompt
+ * so the model produces a numbered markdown implementation plan.
+ * - /writeplan [file]  Saves the last assistant response to PLAN.md (or the
+ * specified file). If the file already exists, prompts for
+ * write / append / clear / delete.
+ * - /endplan           restores the previous model and thinking level.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	writeFileSync,
+	appendFileSync,
+	unlinkSync,
+} from "node:fs";
 import { resolve } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 interface PlanModeConfig {
-	/** Provider id (e.g. "anthropic"). Omit to keep the current provider. */
 	provider?: string;
-	/** Model id within the provider (e.g. "claude-opus-4-7"). */
 	model?: string;
-	/** Thinking level to use in plan mode. */
 	thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-	/** File the plan is written to. Default: "PLAN.md". */
-	planFile?: string;
-	/** Replaces the default plan-mode instructions when set. */
+	planFile?: string; // Kept in config schema as requested
 	instructions?: string;
+	blockList?: string[];
 }
 
 interface PlanState {
-	model: Model<Api> | undefined;
+	providerId: string | undefined;
+	modelId: string | undefined;
 	thinkingLevel: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-	tools: string[];
 }
 
-const DEFAULT_PLAN_FILE = "PLAN.md";
-const DEFAULT_INSTRUCTIONS =
-	"You are in PLAN MODE. Do not modify any code or files. " +
-	"Investigate the codebase with read-only tools, ask clarifying questions when " +
-	"requirements are ambiguous, and produce a concrete, step-by-step implementation " +
-	"plan in your text response. Do not start implementing.";
+const DEFAULT_CONFIG: PlanModeConfig = {
+	provider: "opencode-go",
+	model: "qwen3.7-max",
+	thinkingLevel: "high",
+	planFile: "PLAN.md",
+	blockList: ["edit", "write"],
+	instructions:
+		"You are a meticulous implementation planner.\n" +
+		"If needed, use tools and subagents purely to explore the codebase and gather information first.\n" +
+		"Once you have gathered all necessary context, output a numbered step-by-step implementation plan to solve the request containing:\n" +
+		"1. The specific file(s) to create or modify at each step.\n" +
+		"2. What change to make and why.\n" +
+		"3. Any prerequisite steps (migrations, installs, config changes).\n" +
+		'4. A short "Definition of Done" for the whole task.\n\n' +
+		"Keep each step atomic and independently verifiable.\n" +
+		"If applicable, identify all the places that need changes or might break due to these changes and revise your plan based on your findings.\n" +
+		"When finished, output the final plan as a markdown file without fluff.",
+};
+
+const DEFAULT_INSTRUCTIONS = DEFAULT_CONFIG.instructions!;
 
 export default function planModeExtension(pi: ExtensionAPI) {
 	let config: PlanModeConfig = {};
-	let active = false;
+	let planModeActive = false;
 	let savedState: PlanState | undefined;
 
-	function loadConfig(cwd: string): PlanModeConfig {
+	function loadConfig(ctx: ExtensionContext): PlanModeConfig {
 		const globalPath = resolve(getAgentDir(), "plan-mode.json");
-		const projectPath = resolve(cwd, CONFIG_DIR_NAME, "plan-mode.json");
+		const projectPath = resolve(ctx.cwd, CONFIG_DIR_NAME, "plan-mode.json");
 
-		const merged: PlanModeConfig = {};
+		if (!existsSync(globalPath) && !existsSync(projectPath)) {
+			try {
+				mkdirSync(getAgentDir(), { recursive: true });
+				writeFileSync(
+					globalPath,
+					JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n",
+					"utf8",
+				);
+				console.error(`plan-mode: wrote default config to ${globalPath}`);
+			} catch (err) {
+				console.error(
+					`plan-mode: failed to write default config to ${globalPath}: ${err}`,
+				);
+			}
+		}
+
+		const merged: PlanModeConfig = { ...DEFAULT_CONFIG };
+
 		for (const path of [globalPath, projectPath]) {
 			if (!existsSync(path)) continue;
 			try {
-				Object.assign(merged, JSON.parse(readFileSync(path, "utf8")));
+				const parsed = JSON.parse(readFileSync(path, "utf8"));
+				if (parsed.provider) merged.provider = parsed.provider;
+				if (parsed.model) merged.model = parsed.model;
+				if (parsed.thinkingLevel) merged.thinkingLevel = parsed.thinkingLevel;
+				if (parsed.planFile) merged.planFile = parsed.planFile;
+				if (parsed.instructions) merged.instructions = parsed.instructions;
+				if (parsed.blockList) merged.blockList = parsed.blockList;
 			} catch (err) {
 				console.error(`plan-mode: failed to parse ${path}: ${err}`);
+				ctx.ui.notify(
+					`plan-mode: Failed to parse configuration at ${path}.`,
+					"warning",
+				);
 			}
 		}
 		return merged;
 	}
 
-	function getPlanFile(): string {
-		return config.planFile ?? DEFAULT_PLAN_FILE;
-	}
-
 	async function enablePlanMode(ctx: ExtensionContext): Promise<void> {
-		if (active) {
+		if (planModeActive) {
 			ctx.ui.notify("Already in plan mode", "info");
 			return;
 		}
 
-		// Snapshot current state so /endplan can restore it.
-		savedState = {
-			model: ctx.model,
-			thinkingLevel: pi.getThinkingLevel(),
-			tools: pi.getActiveTools(),
-		};
+		if (!savedState) {
+			savedState = {
+				providerId: ctx.model?.provider.id,
+				modelId: ctx.model?.id,
+				thinkingLevel: pi.getThinkingLevel(),
+			};
+		}
 
-		// Switch model if configured.
 		if (config.provider && config.model) {
 			const model = ctx.modelRegistry.find(config.provider, config.model);
 			if (!model) {
 				ctx.ui.notify(
-					`plan-mode: model ${config.provider}/${config.model} not found in registry`,
-					"warning",
+					`plan-mode: model ${config.provider}/${config.model} not found in registry. Aborting.`,
+					"error",
 				);
-			} else {
-				const ok = await pi.setModel(model);
-				if (!ok) {
-					ctx.ui.notify(
-						`plan-mode: no API key for ${config.provider}/${config.model}`,
-						"warning",
-					);
-				}
+				return;
+			}
+
+			const ok = await pi.setModel(model);
+			if (!ok) {
+				ctx.ui.notify(
+					`plan-mode: no API key for ${config.provider}/${config.model}. Aborting.`,
+					"error",
+				);
+				return;
 			}
 		} else {
 			ctx.ui.notify(
-				"plan-mode: no model configured, keeping current model (set provider + model in plan-mode.json)",
+				"plan-mode: no model configured, keeping current model",
 				"warning",
 			);
 		}
 
-		// Set thinking level.
 		if (config.thinkingLevel) {
 			pi.setThinkingLevel(config.thinkingLevel);
 		}
 
-		// Disable tools the plan model is not allowed to use. The plan model
-		// is read-only: it works from the context the main agent passes in
-		// and produces a plan as its text response, never mutates state.
-		pi.setActiveTools([]);
-
-		active = true;
+		planModeActive = true;
 		ctx.ui.setStatus("plan-mode", ctx.ui.theme.fg("accent", "plan mode"));
-		ctx.ui.notify(`Plan mode enabled — writing to ${getPlanFile()}`, "info");
+
+		pi.appendEntry("plan-mode-state", { active: true, savedState });
+
+		const currentBlockList = config.blockList ?? [];
+		const blockMsg =
+			currentBlockList.length > 0
+				? ` [Blocked: ${currentBlockList.join(", ")}]`
+				: " [All tools allowed]";
+		ctx.ui.notify(`Plan mode enabled${blockMsg}`, "info");
 	}
 
 	async function disablePlanMode(ctx: ExtensionContext): Promise<void> {
-		if (!active) {
+		if (!planModeActive) {
 			ctx.ui.notify("Not in plan mode", "info");
 			return;
 		}
 
 		if (savedState) {
-			if (savedState.model) {
-				await pi.setModel(savedState.model);
+			if (savedState.providerId && savedState.modelId) {
+				const model = ctx.modelRegistry.find(
+					savedState.providerId,
+					savedState.modelId,
+				);
+				if (model) {
+					await pi.setModel(model);
+				}
 			}
 			pi.setThinkingLevel(savedState.thinkingLevel);
-			if (savedState.tools.length > 0) {
-				pi.setActiveTools(savedState.tools);
-			}
 		}
 
-		active = false;
+		planModeActive = false;
 		savedState = undefined;
 		ctx.ui.setStatus("plan-mode", undefined);
+
+		pi.appendEntry("plan-mode-state", { active: false, savedState: undefined });
+
 		ctx.ui.notify("Plan mode disabled", "info");
 	}
 
+	function getLastAssistantText(ctx: ExtensionContext): string | undefined {
+		// Replicates AgentSession.getLastAssistantText(): a session entry wraps
+		// the AgentMessage in { type: "message", message: AgentMessage, ... }.
+		// Walk entries newest-first and concatenate the text content blocks.
+		const lastAssistant = ctx.sessionManager.getEntries().findLast((e) => {
+			if (e.type !== "message") return false;
+			const msg = (
+				e as {
+					message?: { role?: string; stopReason?: string; content?: unknown[] };
+				}
+			).message;
+			if (msg?.role !== "assistant") return false;
+			// Skip aborted empty messages (matches AgentSession behaviour).
+			if (msg.stopReason === "aborted" && (msg.content?.length ?? 0) === 0)
+				return false;
+			return true;
+		});
+		if (!lastAssistant) return undefined;
+		const content = (
+			lastAssistant as {
+				message: { content: { type: string; text?: string }[] };
+			}
+		).message.content;
+		let text = "";
+		for (const block of content) {
+			if (block.type === "text" && typeof block.text === "string")
+				text += block.text;
+		}
+		text = text.trim();
+		return text || undefined;
+	}
+
+	async function handleWritePlan(args: unknown, ctx: ExtensionContext) {
+		const file =
+			typeof args === "string" && args.trim() ? args.trim() : "PLAN.md";
+		const filePath = resolve(ctx.cwd, file);
+
+		const text = getLastAssistantText(ctx);
+		if (!text) {
+			ctx.ui.notify("No assistant message found to save.", "error");
+			return;
+		}
+
+		if (existsSync(filePath)) {
+			if (!ctx.hasUI) {
+				ctx.ui.notify(
+					`${file} already exists. Run interactively to choose overwrite/append/clear/delete.`,
+					"warning",
+				);
+				return;
+			}
+			const choice = await ctx.ui.select(
+				`${file} already exists. What do you want to do?`,
+				["write", "append", "clear", "delete"],
+			);
+			if (!choice) return; // user cancelled
+
+			try {
+				switch (choice) {
+					case "write":
+						writeFileSync(filePath, text, "utf8");
+						ctx.ui.notify(`Wrote plan to ${file}`, "success");
+						break;
+					case "append":
+						appendFileSync(
+							filePath,
+							(existsSync(filePath) ? "\n\n" : "") + text,
+							"utf8",
+						);
+						ctx.ui.notify(`Appended plan to ${file}`, "success");
+						break;
+					case "clear":
+						writeFileSync(filePath, "", "utf8");
+						ctx.ui.notify(`Cleared ${file}`, "success");
+						break;
+					case "delete":
+						unlinkSync(filePath);
+						ctx.ui.notify(`Deleted ${file}`, "success");
+						break;
+				}
+			} catch (err) {
+				ctx.ui.notify(`Failed to ${choice} ${file}: ${err}`, "error");
+			}
+			return;
+		}
+
+		try {
+			writeFileSync(filePath, text, "utf8");
+			ctx.ui.notify(`Wrote plan to ${file}`, "success");
+		} catch (err) {
+			ctx.ui.notify(`Failed to write ${file}: ${err}`, "error");
+		}
+	}
+
 	pi.registerCommand("plan", {
-		description: "Enter plan mode (read-only plan model, no write/edit/bash)",
+		description: "Enter plan mode",
 		handler: async (_args, ctx) => {
 			await enablePlanMode(ctx);
 		},
@@ -170,73 +304,63 @@ export default function planModeExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// Inject the plan-mode instruction into the system prompt.
-	pi.on("before_agent_start", (event) => {
-		if (!active) return;
-		const instructions = config.instructions ?? DEFAULT_INSTRUCTIONS;
+	pi.registerCommand("writeplan", {
+		description:
+			"Write the last assistant response to PLAN.md (or a specified file)",
+		handler: async (args, ctx) => {
+			await handleWritePlan(args, ctx);
+		},
+	});
+
+	pi.on("before_agent_start", (event, ctx) => {
+		if (!planModeActive) return;
+
 		return {
-			systemPrompt: `${event.systemPrompt}\n\n${instructions}`,
+			systemPrompt: `${event.systemPrompt}\n\n${config.instructions ?? DEFAULT_INSTRUCTIONS}`,
 		};
 	});
 
-	// Block any write/edit/bash call — the plan model is read-only and works
-	// only from the context the main agent passes in. The `write` and `edit`
-	// tools are blocked outright (we don't write the plan via tools; the plan
-	// is produced as the assistant's text output). The `bash` tool is also
-	// blocked because shell commands could mutate the repo.
-	pi.on("tool_call", (event) => {
-		if (!active) return;
+	pi.on("tool_call", (event, ctx) => {
+		if (!planModeActive) return;
 
-		if (event.toolName === "write") {
+		const currentBlockList = config.blockList ?? [];
+
+		if (currentBlockList.includes(event.toolName)) {
 			return {
 				block: true,
-				reason: "plan mode: write is disallowed — produce the plan as your text response",
-			};
-		}
-
-		if (event.toolName === "edit") {
-			return {
-				block: true,
-				reason: "plan mode: edit is disallowed — produce the plan as your text response",
-			};
-		}
-
-		if (event.toolName === "bash") {
-			return {
-				block: true,
-				reason: "plan mode: bash is disallowed — work from the context provided",
+				reason: `plan mode: ${event.toolName} is disallowed — work from the context provided and produce the plan as your text response`,
 			};
 		}
 	});
 
-	// Clean up on session shutdown.
-	pi.on("session_shutdown", () => {
-		active = false;
+	pi.on("session_shutdown", (_event, _ctx) => {
+		planModeActive = false;
 		savedState = undefined;
 	});
 
-	// Load config on session start and restore plan mode if the previous
-	// session was still in it.
 	pi.on("session_start", async (event, ctx) => {
-		config = loadConfig(ctx.cwd);
+		config = loadConfig(ctx);
 
 		if (event.reason === "reload") return;
 
-		const lastEntry = ctx.sessionManager.getEntries().at(-1);
-		if (
-			lastEntry &&
-			lastEntry.type === "custom" &&
-			(lastEntry as { customType?: string }).customType === "plan-mode-state" &&
-			(lastEntry as { data?: { active?: boolean } }).data?.active
-		) {
-			await enablePlanMode(ctx);
-		}
-	});
+		const entries = ctx.sessionManager.getEntries();
 
-	// Persist plan-mode state so a /reload keeps the user in plan mode.
-	pi.on("turn_start", () => {
-		if (active) {
-			pi.appendEntry("plan-mode-state", { active: true });
+		const lastStateEntry = entries.findLast(
+			(e) =>
+				e.type === "custom" &&
+				(e as { customType?: string }).customType === "plan-mode-state",
+		);
+
+		if (lastStateEntry) {
+			const entryData = (
+				lastStateEntry as {
+					data?: { active?: boolean; savedState?: PlanState };
+				}
+			).data;
+			if (entryData?.active) {
+				savedState = entryData.savedState;
+				await enablePlanMode(ctx);
+			}
 		}
 	});
 }

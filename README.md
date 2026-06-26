@@ -6,53 +6,57 @@ A pi extension that adds `/plan` and `/endplan` commands for structured, read-on
 
 Plan mode lets you pause coding to think. When you enter plan mode:
 
-- **Model switching** — switches to a dedicated planning model (e.g. Opus, Gemini Pro, DeepSeek) that excels at reasoning and architecture.
+- **Model switching** — switches to a dedicated planning model (`opencode-go/qwen3.7-plus` by default) that excels at reasoning and architecture.
 - **Tool lockdown** — disables `write`, `edit`, and `bash` tools. The model is read-only: it works from the context you've built up and produces a plan as its text response.
-- **Instructions injection** — appends plan-mode instructions to the system prompt, guiding the model to investigate the codebase, ask clarifying questions, and produce a concrete, numbered implementation plan.
+- **Instructions injection** — appends plan-mode instructions to the system prompt, guiding the model to produce a numbered implementation plan with file-level specificity and a definition of done.
 
 When you're ready to implement, `/endplan` restores your original model, thinking level, and tool set — you pick up exactly where you left off.
+
+## Configuration
+
+update: edit vs overwrite (todo)
 
 ## Installation
 
 ```bash
-pi install git:github.com/USER/pi-plan-mode
+pi install git:github.com/Squirreljetpack/pi-plan-mode
 ```
-
-Replace `USER` with the GitHub username or organization hosting this repo.
 
 ## Configuration
 
-Create a `plan-mode.json` file. Project-local (`.pi/plan-mode.json`) takes precedence over global (`~/.pi/agent/plan-mode.json`).
+**Zero-config by default.** On first load, the extension writes `~/.pi/agent/plan-mode.json` with sensible defaults. You only need to create a config file if you want to change the model or instructions.
 
-```json
-{
-  "provider": "anthropic",
-  "model": "claude-opus-4-7",
-  "thinkingLevel": "high",
-  "planFile": "PLAN.md",
-  "instructions": "You are in PLAN MODE. Do not implement. Ask clarifying questions, then produce a numbered step-by-step plan."
-}
-```
+Project-local config (`.pi/plan-mode.json`) takes precedence over global (`~/.pi/agent/plan-mode.json`). Configuration loading merges both files — you can set only the fields you want to override.
 
-### Options
-
-| Key | Required | Default | Description |
-|-----|----------|---------|-------------|
-| `provider` | yes (for model switch) | — | Provider ID from the model registry (e.g. `"anthropic"`, `"opencode-go"`, `"gemini"`) |
-| `model` | yes (for model switch) | — | Model ID within that provider (e.g. `"claude-opus-4-7"`, `"qwen3.7-plus"`, `"gemini-3-pro"`) |
-| `thinkingLevel` | no | current level | Thinking level during plan mode: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` |
-| `planFile` | no | `"PLAN.md"` | Where the plan will be written (informational — the plan is produced as the model's text response) |
-| `instructions` | no | built-in default | Custom instructions injected into the system prompt during plan mode |
-
-If `provider` and `model` are omitted, plan mode keeps your current model but still locks tools and injects planning instructions.
-
-### Example: plan with a reasoning model
+### Default config
 
 ```json
 {
   "provider": "opencode-go",
   "model": "qwen3.7-plus",
-  "thinkingLevel": "high"
+  "thinkingLevel": "high",
+  "planFile": "PLAN.md",
+  "instructions": "You are a pragmatic implementation planner.\nYou receive: a user request, a summary of the current codebase (provided by the main agent), and any relevant findings from the Analyst.\n\nYour output is a numbered step-by-step implementation plan with:\n1. The specific file(s) to create or modify at each step.\n2. What change to make and why.\n3. Any prerequisite steps (migrations, installs, config changes).\n4. A short \"Definition of Done\" for the whole task.\n\nKeep each step atomic and independently verifiable.\nDo not write code. Do not use tools. Work only with the context provided."
+}
+```
+
+### Options
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `provider` | `"opencode-go"` | Provider ID from the model registry (e.g. `"anthropic"`, `"gemini"`, `"opencode-go"`) |
+| `model` | `"qwen3.7-plus"` | Model ID within that provider (e.g. `"claude-opus-4-7"`, `"gemini-3-pro"`) |
+| `thinkingLevel` | `"high"` | Thinking level during plan mode: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` |
+| `planFile` | `"PLAN.md"` | Where the plan will be written (informational — the plan is produced as the model's text response) |
+| `instructions` | (see above) | Custom instructions injected into the system prompt during plan mode |
+
+### Example: plan with Opus
+
+```json
+{
+  "provider": "anthropic",
+  "model": "claude-opus-4-7",
+  "thinkingLevel": "xhigh"
 }
 ```
 
@@ -66,29 +70,29 @@ If `provider` and `model` are omitted, plan mode keeps your current model but st
 }
 ```
 
-### Example: plan with Opus, custom instructions
+### Example: custom instructions
 
 ```json
 {
-  "provider": "anthropic",
-  "model": "claude-opus-4-7",
-  "thinkingLevel": "xhigh",
-  "instructions": "You are in PLAN MODE. First list key files and their purposes. Then outline the architecture. Finally produce a numbered implementation plan with estimated complexity per step."
+  "instructions": "You are in PLAN MODE. First list key files and their purposes. Then outline the architecture. Finally produce a numbered implementation plan with estimated complexity per step. Do not write code."
 }
 ```
 
 ## Usage
 
 ```
-/plan         Enter plan mode
-/endplan      Exit plan mode
+/plan             Enter plan mode
+/endplan          Exit plan mode
+/writeplan [file] Save the last assistant message to PLAN.md (or [file]).
+                  If the file exists, prompts for write / append / clear / delete.
 ```
 
 1. Do your research, file reads, exploration with your normal coding model.
 2. Type `/plan` — pi switches to your planning model, disables write/edit/bash tools, and injects plan instructions.
 3. Send your prompt. The model receives the full conversation context and produces a plan.
-4. Type `/endplan` — pi restores your original model, thinking level, and tools.
-5. Start implementing the plan.
+4. Type `/writeplan` (or `/writeplan path/to/plan.md`) to save the plan. If the target file already exists, pi prompts you to overwrite, append, clear, or delete it.
+5. Type `/endplan` — pi restores your original model, thinking level, and tools.
+6. Start implementing the plan.
 
 Plan-mode state persists across `/reload` — if you reload while in plan mode, you stay in plan mode.
 
@@ -98,9 +102,9 @@ Plan-mode state persists across `/reload` — if you reload while in plan mode, 
 
 **Tool lockdown** (`pi.setActiveTools([])`) — clears all active tools so the LLM cannot call `write`, `edit`, or `bash`. Additionally, `tool_call` event handlers block these tools outright as a defense-in-depth measure.
 
-**System prompt injection** (`before_agent_start` event) — appends plan-mode instructions to the system prompt. The default instruction tells the model it is in plan mode, to use read-only tools for investigation, to ask clarifying questions, and to produce a numbered step-by-step plan without starting implementation. Override with the `instructions` config field.
+**System prompt injection** (`before_agent_start` event) — appends plan-mode instructions to the system prompt. The default instructions guide the model to produce a numbered, file-level implementation plan with a definition of done. Override with the `instructions` config field.
 
-**Planning model selection** — choose any model in your pi model registry. The key is picking a model that reasons well about architecture and breaks down problems systematically.
+**Auto-config** — on first load, if no config file exists, the extension writes a default `~/.pi/agent/plan-mode.json`. This means plan mode works out of the box with `opencode-go/qwen3.7-plus` at high thinking.
 
 ## License
 
