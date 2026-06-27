@@ -12,9 +12,42 @@ Plan mode lets you pause coding to think. When you enter plan mode:
 
 When you're ready to implement, `/endplan` restores your original model, thinking level, and tool set — you pick up exactly where you left off.
 
-## Configuration
+## Summarization and auto-save
 
-update: edit vs overwrite (todo)
+In addition to plan mode, the extension ships two convenience features
+that share a single summarizer model:
+
+- **`/summarize`** — runs the configured summarizer (`summarizerProvider` +
+  `summarizerModel`, or the current model) over the conversation using
+  `summarizerPrompt`, then writes the result to
+  `summarizeDir/<YYYY-MM-DD>-<sessionId8>.md`.
+- **`autoSaveDir`** — when set, after every completed agent turn the
+  extension writes a fully-styled HTML export of the session to
+  `autoSaveDir/<YYYY-MM-DD>-<slug>.html` (the same format as pi's
+  built-in `/export` command). The slug is a 2–5 word title generated
+  by the summarizer from the first three user prompts; if the
+  summarizer fails, the file is named after a short session id
+  instead of `untitled`.
+
+```json
+{
+  "summarizerProvider": "opencode-go",
+  "summarizerModel": "qwen3.7-max",
+  "summarizerPrompt": "Summarize the conversation in 3 short bullets.",
+  "summarizeDir": "~/.pi/agent/summaries",
+  "autoSaveDir": "~/.pi/agent/autosaves"
+}
+```
+
+If `summarizerProvider` / `summarizerModel` are omitted, the summarizer
+falls back to whatever model is currently active in pi.
+
+Both `summarizeDir` and `autoSaveDir` accept a leading `~` for the user's
+home directory (e.g. `"~/.pi/saved/html"`).
+
+See [`examples/plan-mode.example.json`](examples/plan-mode.example.json)
+for a full config with every field at its default, plus
+`autoSaveDir = "~/.pi/saved/html"` and a `minimax-m3` summarizer.
 
 ## Installation
 
@@ -49,6 +82,12 @@ Project-local config (`.pi/plan-mode.json`) takes precedence over global (`~/.pi
 | `thinkingLevel` | `"high"` | Thinking level during plan mode: `"off"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"` |
 | `planFile` | `"PLAN.md"` | Where the plan will be written (informational — the plan is produced as the model's text response) |
 | `instructions` | (see above) | Custom instructions injected into the system prompt during plan mode |
+| `blockList` | `["edit", "write"]` | Tool names blocked outright while plan mode is active (defense-in-depth) |
+| `summarizerProvider` | (current model) | Provider used by `/summarize` and `autoSaveDir` |
+| `summarizerModel` | (current model) | Model used by `/summarize` and `autoSaveDir` |
+| `summarizerPrompt` | (see source) | Prompt sent to the summarizer for `/summarize` |
+| `summarizeDir` | unset | Required for `/summarize`; output goes here |
+| `autoSaveDir` | unset | If set, an HTML export of the session is written here after every turn |
 
 ### Example: plan with Opus
 
@@ -84,15 +123,23 @@ Project-local config (`.pi/plan-mode.json`) takes precedence over global (`~/.pi
 /plan             Enter plan mode
 /endplan          Exit plan mode
 /writeplan [file] Save the last assistant message to PLAN.md (or [file]).
-                  If the file exists, prompts for write / append / clear / delete.
+                  If the file exists and is non-empty, prompts for
+                  write / append / clear / delete.
+/summarize        Summarize the conversation and write to
+                  summarizeDir/<date>-<sessionId8>.md.
 ```
 
 1. Do your research, file reads, exploration with your normal coding model.
 2. Type `/plan` — pi switches to your planning model, disables write/edit/bash tools, and injects plan instructions.
 3. Send your prompt. The model receives the full conversation context and produces a plan.
-4. Type `/writeplan` (or `/writeplan path/to/plan.md`) to save the plan. If the target file already exists, pi prompts you to overwrite, append, clear, or delete it.
+4. Type `/writeplan` (or `/writeplan path/to/plan.md`) to save the plan. If the target file already exists and is non-empty, pi prompts you to overwrite, append, clear, or delete it.
 5. Type `/endplan` — pi restores your original model, thinking level, and tools.
 6. Start implementing the plan.
+
+If `autoSaveDir` is configured, every completed agent turn also writes a
+dated, summarizer-titled **HTML** snapshot of the session to that
+directory — the same format pi's `/export` command produces. Use
+`/summarize` to produce a single deliberate markdown summary at any time.
 
 Plan-mode state persists across `/reload` — if you reload while in plan mode, you stay in plan mode.
 
