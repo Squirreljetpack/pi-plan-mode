@@ -108,12 +108,17 @@ describe("config loading", () => {
 		const env = new TestEnv();
 		try {
 			await env.loadExtension();
-			for (const name of ["plan", "endplan", "writeplan", "summarize"]) {
+			for (const name of ["plan", "endplan", "summarize"]) {
 				assert.ok(
 					env.commands[name],
 					`command ${name} is registered at load time`,
 				);
 			}
+			assert.equal(
+				env.commands.writeplan,
+				undefined,
+				"writeplan is folded into /plan write",
+			);
 		} finally {
 			env.cleanup();
 		}

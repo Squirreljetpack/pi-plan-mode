@@ -38,6 +38,8 @@ export class TestEnv {
 		this.responses = []; // queued mock responses
 		this.setModelResults = []; // pi.setModel args
 		this.thinkingLevelCalls = []; // pi.setThinkingLevel args
+		this.sentUserMessages = []; // pi.sendUserMessage args
+		this.editorTextSets = []; // ctx.ui.setEditorText args
 	}
 
 	writeConfig(config) {
@@ -99,6 +101,11 @@ export class TestEnv {
 		});
 		const m = await jiti.import(EXTENSION_PATH);
 		const ext = m.default;
+		// base impl just records; buildCtx() wraps it to also update ctx.model
+		this.setModelImpl = async (model) => {
+			this.setModelResults.push(model);
+			return true;
+		};
 		ext({
 			registerCommand: (name, cmd) => {
 				this.commands[name] = cmd;
@@ -111,9 +118,9 @@ export class TestEnv {
 			setThinkingLevel: (level) => {
 				this.thinkingLevelCalls.push(level);
 			},
-			setModel: async (model) => {
-				this.setModelResults.push(model);
-				return true;
+			setModel: async (model) => this.setModelImpl(model),
+			sendUserMessage: (content) => {
+				this.sentUserMessages.push(content);
 			},
 		});
 	}
@@ -135,10 +142,10 @@ export class TestEnv {
 			input: ["text"],
 			thinkingLevelMap: {},
 		}));
-		const currentModel =
+		const initialModel =
 			allModels.find((m) => m.provider.id === provider && m.id === modelId) ??
 			allModels[0];
-		return {
+		const ctx = {
 			cwd: this.tmpDir,
 			hasUI,
 			mode,
@@ -153,7 +160,7 @@ export class TestEnv {
 					headers: {},
 				}),
 			},
-			model: currentModel,
+			model: initialModel,
 			ui: {
 				notify: (message, type) => {
 					this.notifications.push({ message, type });
@@ -163,10 +170,21 @@ export class TestEnv {
 				confirm: async () => false,
 				editor: async () => undefined,
 				setStatus: () => {},
+				setEditorText: (text) => {
+					this.editorTextSets.push(text);
+				},
 				theme: { fg: (_color, text) => text },
 			},
 			signal: undefined,
 		};
+		// Wrap setModel so ctx.model follows the swap, matching real pi.
+		const origSetModel = this.setModelImpl;
+		this.setModelImpl = async (model) => {
+			const ok = await origSetModel(model);
+			if (ok) ctx.model = model;
+			return ok;
+		};
+		return ctx;
 	}
 
 	async startSession() {

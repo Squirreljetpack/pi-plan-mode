@@ -308,4 +308,121 @@ describe("/plan and /endplan", () => {
 			env.cleanup();
 		}
 	});
+
+	test("/endplan with next_prompt submits when model switched on entry", async () => {
+		const env = new TestEnv();
+		try {
+			await env.loadExtension();
+			env.writeConfig({
+				provider: "opencode-go",
+				model: "plan-model",
+			});
+			const ctx = env.buildCtx({
+				provider: "opencode-go",
+				modelId: "user-model",
+				models: [
+					{ provider: "opencode-go", id: "user-model" },
+					{ provider: "opencode-go", id: "plan-model" },
+				],
+			});
+			await env.events.session_start({ reason: "start" }, ctx);
+			await env.commands.plan.handler("", ctx);
+
+			await env.commands.endplan.handler("now do the thing", ctx);
+
+			assert.equal(env.sentUserMessages.length, 1);
+			assert.equal(env.sentUserMessages[0], "now do the thing");
+			assert.equal(
+				env.editorTextSets.length,
+				0,
+				"must not also stuff text into the editor",
+			);
+			assert.equal(
+				env.setModelResults[env.setModelResults.length - 1].id,
+				"user-model",
+				"model restored before the next prompt is submitted",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	test("/endplan with next_prompt puts text in the editor when plan model equals user model (safety guard)", async () => {
+		const env = new TestEnv();
+		try {
+			await env.loadExtension();
+			env.writeConfig({
+				provider: "opencode-go",
+				model: "user-model",
+			});
+			const ctx = env.buildCtx({
+				provider: "opencode-go",
+				modelId: "user-model",
+				models: [{ provider: "opencode-go", id: "user-model" }],
+			});
+			await env.events.session_start({ reason: "start" }, ctx);
+			await env.commands.plan.handler("", ctx);
+
+			await env.commands.endplan.handler("now implement step 1", ctx);
+
+			assert.equal(env.sentUserMessages.length, 0, "must not auto-submit");
+			assert.deepEqual(env.editorTextSets, ["now implement step 1"]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	test("/endplan with whitespace-only next_prompt is a no-op (no submit, no editor)", async () => {
+		const env = new TestEnv();
+		try {
+			await env.loadExtension();
+			env.writeConfig({
+				provider: "opencode-go",
+				model: "plan-model",
+			});
+			const ctx = env.buildCtx({
+				provider: "opencode-go",
+				modelId: "user-model",
+				models: [
+					{ provider: "opencode-go", id: "user-model" },
+					{ provider: "opencode-go", id: "plan-model" },
+				],
+			});
+			await env.events.session_start({ reason: "start" }, ctx);
+			await env.commands.plan.handler("", ctx);
+
+			await env.commands.endplan.handler("   ", ctx);
+
+			assert.equal(env.sentUserMessages.length, 0);
+			assert.equal(env.editorTextSets.length, 0);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	test("/endplan in headless mode with next_prompt does not call setEditorText", async () => {
+		const env = new TestEnv();
+		try {
+			await env.loadExtension();
+			env.writeConfig({
+				provider: "opencode-go",
+				model: "user-model",
+			});
+			const ctx = env.buildCtx({
+				provider: "opencode-go",
+				modelId: "user-model",
+				hasUI: false,
+				models: [{ provider: "opencode-go", id: "user-model" }],
+			});
+			await env.events.session_start({ reason: "start" }, ctx);
+			await env.commands.plan.handler("", ctx);
+
+			await env.commands.endplan.handler("no editor in headless", ctx);
+
+			assert.equal(env.sentUserMessages.length, 0);
+			assert.equal(env.editorTextSets.length, 0, "no editor in headless mode");
+		} finally {
+			env.cleanup();
+		}
+	});
 });

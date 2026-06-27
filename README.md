@@ -110,20 +110,19 @@ Project-local config (`.pi/plan-mode.json`) takes precedence over global (`~/.pi
 ## Usage
 
 ```
-/plan             Enter plan mode
-/endplan          Exit plan mode
-/writeplan [file] Save the last assistant message to PLAN.md (or [file]).
-                  If the file exists and is non-empty, prompts for
-                  write / append / clear / delete.
-/summarize        Summarize the conversation and write to
-                  summarizeDir/<date>-<sessionId8>.md.
+/plan                    Enter plan mode
+/plan write [file]       Save the last assistant message to PLAN.md (or [file]).
+/endplan [next_prompt]   Exit plan mode. With [next_prompt]: submit it iff
+                         switching out actually changed models; otherwise
+                         drop it into the next prompt line.
+/summarize               Summarize the conversation to summarizeDir/.
 ```
 
 1. Do your research, file reads, exploration with your normal coding model.
 2. Type `/plan` — pi switches to your planning model, disables write/edit/bash tools, and injects plan instructions.
 3. Send your prompt. The model receives the full conversation context and produces a plan.
-4. Type `/writeplan` (or `/writeplan path/to/plan.md`) to save the plan. If the target file already exists and is non-empty, pi prompts you to overwrite, append, clear, or delete it.
-5. Type `/endplan` — pi restores your original model, thinking level, and tools.
+4. Type `/plan write` (or `/plan write path/to/plan.md`) to save the plan. If the target file already exists and is non-empty, pi prompts you to overwrite, append, clear, or delete it.
+5. Type `/endplan` to exit plan mode, optionally followed by your first implementation prompt (e.g. `/endplan now implement step 1`).
 6. Start implementing the plan.
 
 Type `/summarize` at any time to produce a markdown summary of the
@@ -151,7 +150,7 @@ MIT
 npm test
 ```
 
-Runs the test suite (35 tests across 5 files) using Node's built-in
+Runs the test suite (41 tests across 5 files) using Node's built-in
 `node:test` runner. The suite:
 
 - Loads the extension via jiti with a mocked `@earendil-works/pi-ai/compat`,
@@ -170,7 +169,7 @@ Files:
 - `tests/_setup.mjs` — symlink farm
 - `tests/_helpers.mjs` — `TestEnv` class (tmp HOME/cwd, real SessionManager, mock complete, captured hooks)
 - `tests/config.test.mjs` — default config creation, global vs project merging, malformed config
-- `tests/plan-mode.test.mjs` — `/plan`, `/endplan`, model switching, tool blocking, instructions injection, state persistence across reload
+- `tests/plan-mode.test.mjs` — `/plan`, `/endplan` (incl. `next_prompt`), model switching, tool blocking, instructions injection, state persistence across reload
 - `tests/summarize.test.mjs` — `/summarize`, summarizer prompt forwarding, model fallback
 - `tests/tilde.test.mjs` — `~` expansion in directory fields
-- `tests/writeplan.test.mjs` — `/writeplan`, conflict prompt, headless mode, error paths
+- `tests/writeplan.test.mjs` — `/plan write [file]` (formerly `/writeplan`), conflict prompt, headless mode, error paths
