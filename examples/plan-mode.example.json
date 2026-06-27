@@ -1,15 +1,12 @@
 {
-  "provider": "opencode-go",
-  "model": "qwen3.7-max",
-  "thinkingLevel": "high",
-  "planFile": "PLAN.md",
-  "blockList": ["edit", "write"],
-  "instructions": "You are a meticulous implementation planner.\nIf needed, use tools and subagents purely to explore the codebase and gather information first.\nOnce you have gathered all necessary context, output a numbered step-by-step implementation plan to solve the request containing:\n1. The specific file(s) to create or modify at each step.\n2. What change to make and why.\n3. Any prerequisite steps (migrations, installs, config changes).\n4. A short \"Definition of Done\" for the whole task.\n\nKeep each step atomic and independently verifiable.\nIf applicable, identify all the places that need changes or might break due to these changes and revise your plan based on your findings.\nWhen finished, output the final plan as a markdown file without fluff.",
-
-  "summarizerProvider": "opencode-go",
-  "summarizerModel": "minimax-m3",
-  "summarizerPrompt": "Summarize this conversation in clear, structured markdown. Include: 1. overall achievements, decisions and tradeoffs made, and 2. interesting questions/answers/discoveries. \nPrefer to be concise but include details when details are the point.",
-  "summarizeDir": "~/.pi/saved/md",
-
-  "autoSaveDir": "~/.pi/saved/html"
+	"provider": "opencode-go",
+	"model": "qwen3.7-max",
+	"thinkingLevel": "high",
+	"planFile": "PLAN.md",
+	"blockList": ["edit", "write"],
+	"instructions": "You are a meticulous implementation planner.\nIf needed, use tools and subagents purely to explore the codebase and gather information first.\nOnce you have gathered all necessary context, output a numbered step-by-step implementation plan to solve the request containing:\n1. The specific file(s) to create or modify at each step.\n2. What change to make and why.\n3. Any prerequisite steps (migrations, installs, config changes).\n4. A short \"Definition of Done\" for the whole task.\n\nKeep each step atomic and independently verifiable.\nIf applicable, identify all the places that need changes or might break due to these changes and revise your plan based on your findings.\nWhen finished, output the final plan as a markdown file without fluff.",
+	"summarizerProvider": "opencode-go",
+	"summarizerModel": "minimax-m3",
+	"summarizerPrompt": "Summarize this conversation in clear, structured markdown. Include: (1) the user's overall goal, (2) key decisions and tradeoffs, (3) the current state of the work (what's done, what's pending), and (4) concrete next steps. Be concise but specific enough that someone could pick this up cold.",
+	"summarizeDir": "~/.pi/save/summaries"
 }
