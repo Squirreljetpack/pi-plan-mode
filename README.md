@@ -112,6 +112,10 @@ Project-local config (`.pi/plan-mode.json`) takes precedence over global (`~/.pi
 ```
 /plan                    Enter plan mode
 /plan write [file]       Save the last assistant message to PLAN.md (or [file]).
+/plan set | s            Capture the current model/provider into the plan
+                         config (writes to .pi/plan-mode.json if it exists;
+                         otherwise prompts for project vs global), then
+                         enter plan mode. Inside plan mode, just writes.
 /endplan [next_prompt]   Exit plan mode. With [next_prompt]: submit it iff
                          switching out actually changed models; otherwise
                          drop it into the next prompt line.
@@ -120,6 +124,7 @@ Project-local config (`.pi/plan-mode.json`) takes precedence over global (`~/.pi
 
 1. Do your research, file reads, exploration with your normal coding model.
 2. Type `/plan` — pi switches to your planning model, disables write/edit/bash tools, and injects plan instructions.
+   - Or `/plan set` to first capture your current model as the plan default. Writes to `.pi/plan-mode.json` if it exists; otherwise prompts for project vs global. Inside plan mode, `/plan set` just writes the current model (useful after switching models mid-plan with `/model`).
 3. Send your prompt. The model receives the full conversation context and produces a plan.
 4. Type `/plan write` (or `/plan write path/to/plan.md`) to save the plan. If the target file already exists and is non-empty, pi prompts you to overwrite, append, clear, or delete it.
 5. Type `/endplan` to exit plan mode, optionally followed by your first implementation prompt (e.g. `/endplan now implement step 1`).
@@ -139,6 +144,8 @@ Plan-mode state persists across `/reload` — if you reload while in plan mode, 
 **System prompt injection** (`before_agent_start` event) — appends plan-mode instructions to the system prompt. The default instructions guide the model to produce a numbered, file-level implementation plan with a definition of done. Override with the `instructions` config field.
 
 **Auto-config** — on first load, if no config file exists, the extension writes a default `~/.pi/agent/plan-mode.json`. This means plan mode works out of the box with `opencode-go/qwen3.7-plus` at high thinking.
+
+**Capture current model** — `/plan set` writes the currently active model/provider into the plan config, then enters plan mode. If `.pi/plan-mode.json` exists, the update goes there; otherwise the user is prompted to choose between project and global. All other config fields (instructions, blockList, summarizer settings, etc.) are preserved. Inside plan mode, `/plan set` is a write-only operation — it does not re-enter plan mode.
 
 ## License
 

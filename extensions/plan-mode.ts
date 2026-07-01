@@ -4,6 +4,9 @@
  * - /plan               switch to the configured plan model, block listed
  *                       tools, and inject planning instructions.
  * - /plan write [file]  save the last assistant message to PLAN.md (or [file]).
+ * - /plan set           capture the current model/provider into the plan
+ *                       config (project if it exists, else prompted for
+ *                       project vs global), then enter plan mode.
  * - /endplan [prompt]   restore the previous model/thinking level. If [prompt]
  *                       is given and exiting actually changes the model,
  *                       submit it; otherwise drop it into the editor.
@@ -507,6 +510,128 @@ export default function planModeExtension(pi: ExtensionAPI) {
   }
 
   // =========================================================================
+  // /plan set — capture the current model/provider into the plan config
+  // =========================================================================
+
+  /** Resolve the project and global plan-mode.json paths. */
+  function configPaths(ctx: ExtensionContext): { project: string; global: string } {
+    return {
+      project: resolve(ctx.cwd, CONFIG_DIR_NAME, "plan-mode.json"),
+      global: resolve(getAgentDir(), "plan-mode.json"),
+    };
+  }
+
+  /**
+   * Capture the current `ctx.model` into the plan config. If a project
+   * config already exists, write there; otherwise prompt the user to
+   * choose between project and global (headless mode refuses and asks
+   * the user to run interactively). All other fields in the target
+   * config are preserved. Outside plan mode, also enters plan mode
+   * after the write; inside plan mode, the write is the only effect.
+   */
+  async function handleSetPlanModel(ctx: ExtensionContext): Promise<void> {
+    if (!ctx.model) {
+      ctx.ui.notify("plan-mode: no current model to save as default", "error");
+      return;
+    }
+
+    const provider = ctx.model.provider.id;
+    const model = ctx.model.id;
+    const paths = configPaths(ctx);
+
+    let targetPath: string;
+    if (existsSync(paths.project)) {
+      targetPath = paths.project;
+    } else {
+      if (!ctx.hasUI) {
+        ctx.ui.notify(
+          "plan-mode: no project config exists. Run interactively to choose where to save the plan model.",
+          "warning",
+        );
+        return;
+      }
+      const choice = await ctx.ui.select(
+        "No project plan-mode config. Where should the plan model be saved?",
+        [
+          `Project (${paths.project})`,
+          `Global (${paths.global})`,
+        ],
+      );
+      if (!choice) {
+        ctx.ui.notify("plan-mode: set cancelled", "info");
+        return;
+      }
+      if (choice.startsWith("Project")) {
+        targetPath = paths.project;
+      } else if (choice.startsWith("Global")) {
+        targetPath = paths.global;
+      } else {
+        ctx.ui.notify(
+          `plan-mode: unexpected selection: ${choice}`,
+          "error",
+        );
+        return;
+      }
+    }
+
+    // Read the existing target config (if any) and preserve every field.
+    // We only update `provider` and `model`; instructions, blockList,
+    // summarizer*, planFile, thinkingLevel, etc. are left untouched.
+    let merged: PlanModeConfig = {};
+    if (existsSync(targetPath)) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(readFileSync(targetPath, "utf8"));
+      } catch (err) {
+        ctx.ui.notify(
+          `plan-mode: config at ${targetPath} is malformed; fix it before /plan set — ${err}`,
+          "error",
+        );
+        return;
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        ctx.ui.notify(
+          `plan-mode: config at ${targetPath} is not a JSON object; aborting`,
+          "error",
+        );
+        return;
+      }
+      merged = { ...(parsed as PlanModeConfig) };
+    }
+
+    merged.provider = provider;
+    merged.model = model;
+
+    try {
+      mkdirSync(resolve(targetPath, ".."), { recursive: true });
+      writeFileSync(targetPath, JSON.stringify(merged, null, 2) + "\n", "utf8");
+    } catch (err) {
+      ctx.ui.notify(
+        `plan-mode: failed to write config at ${targetPath}: ${err}`,
+        "error",
+      );
+      return;
+    }
+
+    // Mirror the on-disk state into the in-memory config so the next
+    // enablePlanMode() (if we enter it) uses the new model.
+    config.provider = provider;
+    config.model = model;
+
+    ctx.ui.notify(
+      `plan-mode: default plan model set to ${provider}/${model} (${targetPath})`,
+      "success",
+    );
+
+    if (planModeActive) return;
+
+    // Outside plan mode: enter plan mode with the new model. The
+    // saved state captures the user's current model so /endplan can
+    // restore it.
+    await enablePlanMode(ctx);
+  }
+
+  // =========================================================================
   // /summarize
   // =========================================================================
   async function handleSummarizeCommand(ctx: ExtensionContext) {
@@ -536,20 +661,27 @@ export default function planModeExtension(pi: ExtensionAPI) {
   }
 
   pi.registerCommand("plan", {
-    description: "Enter plan mode (or `/plan write [file]` to save the last plan)",
+    description: "Enter plan mode (or `/plan write [file]`, `/plan set` to capture the current model)",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
 
       // Matches 'write' or 'w' at the start, followed by either a space or the end of the string
-      const match = trimmed.match(/^(write|w)\b\s*/i);
-
-      if (match) {
+      const writeMatch = trimmed.match(/^(write|w)\b\s*/i);
+      if (writeMatch) {
         // match[0] is the entire matched prefix (e.g., "write " or "w ")
-        const file = trimmed.substring(match[0].length).trim();
-
+        const file = trimmed.substring(writeMatch[0].length).trim();
         await handleWritePlan(file, ctx);
         return;
       }
+
+      // Matches 'set' or 's' at the start, followed by a word boundary.
+      // Takes no arguments — anything after the subcommand is ignored.
+      const setMatch = trimmed.match(/^(set|s)\b\s*/i);
+      if (setMatch) {
+        await handleSetPlanModel(ctx);
+        return;
+      }
+
       await enablePlanMode(ctx);
     },
   });
